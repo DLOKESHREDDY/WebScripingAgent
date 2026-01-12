@@ -78,22 +78,47 @@ class ProductSearchAgent(BaseAgent):
         if model_match:
             specs["model"] = model_match.group(0)
         
+        # Extract core product name (just the main product, not specs)
+        # For iPhone: "iPhone 15 Pro 256GB white" -> "iPhone 15"
+        # For Samsung: "Samsung Galaxy S24 Ultra" -> "Samsung Galaxy S24"
+        product_name = query
+        
+        # For iPhone, extract just "iPhone" + number
+        if "iphone" in query_lower:
+            iphone_match = re.search(r'iphone\s+(\d+)', query_lower)
+            if iphone_match:
+                search_query = f"iPhone {iphone_match.group(1)}"
+                product_name = f"iPhone {iphone_match.group(1)} Pro"  # Keep Pro in product_name for matching
+            else:
+                search_query = "iPhone"
+        # For Samsung Galaxy
+        elif "galaxy" in query_lower or "samsung" in query_lower:
+            galaxy_match = re.search(r'(samsung\s+galaxy\s+s\d+)', query_lower)
+            if galaxy_match:
+                search_query = galaxy_match.group(1).title()
+                product_name = query  # Keep full name
+            else:
+                words = query.split()
+                search_query = " ".join(words[:3])
+        else:
+            # For other products, take first 2-3 words
+            words = query.split()
+            search_query = " ".join(words[:3]) if len(words) >= 3 else query
+        
         # Extract brand
         brands = ["apple", "samsung", "google", "sony", "lg", "nike", "adidas"]
-        for brand in brands:
-            if brand in query_lower:
-                return {
-                    "product_name": query,
-                    "brand": brand.capitalize(),
-                    "specifications": specs,
-                    "website": None
-                }
+        brand = None
+        for brand_name in brands:
+            if brand_name in query_lower:
+                brand = brand_name.capitalize()
+                break
         
         return {
-            "product_name": query,
-            "brand": None,
+            "product_name": product_name,
+            "brand": brand,
             "specifications": specs,
-            "website": None
+            "website": None,
+            "search_query": search_query  # Simplified name for search
         }
     
     async def determine_website(self, product_specs: Dict[str, Any]) -> str:
@@ -134,7 +159,7 @@ class ProductSearchAgent(BaseAgent):
             
             # Special handling for Apple.com - need to click search icon first
             if "apple.com" in current_url.lower():
-                self.log("🍎 Detected Apple.com - opening search menu first...")
+                self.log("Detected Apple.com - opening search menu first...")
                 apple_search_icons = [
                     "#ac-gn-searchform",
                     "button.ac-gn-searchform-submit",
@@ -151,7 +176,7 @@ class ProductSearchAgent(BaseAgent):
                             is_visible = await icon.is_visible()
                             if is_visible:
                                 await icon.click()
-                                self.log(f"✅ Clicked Apple search icon: {icon_selector}")
+                                self.log(f"Clicked Apple search icon: {icon_selector}")
                                 await asyncio.sleep(2)  # Wait for search input to appear
                                 break
                     except:
@@ -170,7 +195,7 @@ class ProductSearchAgent(BaseAgent):
                     try:
                         element = await page.wait_for_selector(selector, timeout=3000, state="visible")
                         if element:
-                            self.log(f"✅ Found Apple search input: {selector}")
+                            self.log(f"Found Apple search input: {selector}")
                             return {
                                 "found": True,
                                 "input_selector": selector,
@@ -211,7 +236,7 @@ class ProductSearchAgent(BaseAgent):
                         name_attr = await element.evaluate("el => el.name || ''")
                         id_attr = await element.evaluate("el => el.id || ''")
                         
-                        self.log(f"✅ Found search box: {selector} (tag: {tag_name}, type: {input_type}, name: {name_attr}, id: {id_attr})")
+                        self.log(f"Found search box: {selector} (tag: {tag_name}, type: {input_type}, name: {name_attr}, id: {id_attr})")
                         
                         # Find associated button
                         button_selectors = [
@@ -284,7 +309,7 @@ class ProductSearchAgent(BaseAgent):
                 
                 ai_result = json.loads(result_text)
                 if ai_result.get("input_selector"):
-                    self.log(f"✅ AI found search box: {ai_result.get('input_selector')}")
+                    self.log(f"AI found search box: {ai_result.get('input_selector')}")
                     return {
                         "found": True,
                         "input_selector": ai_result.get("input_selector"),
@@ -316,7 +341,7 @@ class ProductSearchAgent(BaseAgent):
                         elif inp.get('name'):
                             selector = f"input[name='{inp.get('name')}']"
                         
-                        self.log(f"✅ Found search box via HTML parsing: {selector}")
+                        self.log(f"Found search box via HTML parsing: {selector}")
                         return {
                             "found": True,
                             "input_selector": selector,
@@ -335,17 +360,102 @@ class ProductSearchAgent(BaseAgent):
     async def execute_search(self, search_query: str, page) -> bool:
         """Execute search using the found search box."""
         try:
-            # Find search box
+            current_url = page.url
+            
+            # Special handling for Apple.com
+            if "apple.com" in current_url.lower():
+                self.log("Detected Apple.com - using Apple-specific search flow")
+                
+                # Step 1: Click search icon to open search menu
+                apple_search_icons = [
+                    '#ac-gn-searchform',
+                    'button.ac-gn-searchform-submit',
+                    'a[aria-label*="Search" i]',
+                    'button[aria-label*="Search" i]'
+                ]
+                
+                search_menu_opened = False
+                for icon_selector in apple_search_icons:
+                    try:
+                        icon = await page.query_selector(icon_selector)
+                        if icon:
+                            is_visible = await icon.is_visible()
+                            if is_visible:
+                                self.log(f"Clicking Apple search icon: {icon_selector}")
+                                await icon.click()
+                                await asyncio.sleep(2)  # Wait for search input to appear
+                                search_menu_opened = True
+                                self.log("Apple search menu opened")
+                                break
+                    except Exception as e:
+                        self.log(f"Could not click icon {icon_selector}: {str(e)[:50]}", "debug")
+                        continue
+                
+                if not search_menu_opened:
+                    self.log("Warning: Could not open Apple search menu, trying direct input", "warning")
+                
+                # Step 2: Find and fill search input
+                apple_input_selectors = [
+                    '#ac-gn-searchform-input',
+                    'input.ac-gn-searchform-input',
+                    'input[type="search"]',
+                    'input[name="q"]',
+                    'input[aria-label*="Search" i]'
+                ]
+                
+                search_filled = False
+                for selector in apple_input_selectors:
+                    try:
+                        self.log(f"Trying to find search input: {selector}")
+                        search_input = await page.wait_for_selector(selector, timeout=3000, state='visible')
+                        if search_input:
+                            self.log(f"Found search input: {selector}")
+                            
+                            # Click to focus
+                            await search_input.click()
+                            await asyncio.sleep(0.5)
+                            
+                            # Clear any existing text
+                            await search_input.fill('')
+                            await asyncio.sleep(0.3)
+                            
+                            # Type the search query
+                            await search_input.fill(search_query)
+                            self.log(f"Typed search query: {search_query}")
+                            await asyncio.sleep(1)
+                            
+                            # Submit search
+                            await search_input.press('Enter')
+                            self.log("Pressed Enter to submit search")
+                            search_filled = True
+                            
+                            # Wait for navigation
+                            await page.wait_for_load_state('networkidle', timeout=10000)
+                            await asyncio.sleep(2)
+                            
+                            new_url = page.url
+                            self.log(f"Search submitted, navigated to: {new_url}")
+                            return True
+                    except Exception as e:
+                        self.log(f"Selector {selector} failed: {str(e)[:50]}", "debug")
+                        continue
+                
+                if not search_filled:
+                    self.log("Could not fill Apple search input", "error")
+                    return False
+            
+            # Generic search flow for other websites
+            self.log("Using generic search flow")
             search_info = await self.find_search_box_universal(page)
             
             if not search_info.get("found"):
-                self.log("❌ Could not find search box on page", "error")
+                self.log("Could not find search box on page", "error")
                 return False
             
             input_selector = search_info["input_selector"]
             button_selector = search_info.get("button_selector")
             
-            self.log(f"🔍 Using search box: {input_selector}")
+            self.log(f"Using search box: {input_selector}")
             
             # Wait for and interact with search input
             try:
@@ -354,13 +464,15 @@ class ProductSearchAgent(BaseAgent):
                     self.log(f"Search input not visible: {input_selector}", "error")
                     return False
                 
-                # Clear and fill
+                # Click to focus
                 await search_input.click()
                 await asyncio.sleep(0.5)
+                
+                # Clear and fill
                 await search_input.fill('')  # Clear first
                 await asyncio.sleep(0.3)
                 await search_input.fill(search_query)
-                self.log(f"✅ Typed search query: {search_query}")
+                self.log(f"Typed search query: {search_query}")
                 await asyncio.sleep(1)
                 
                 # Submit search
@@ -372,7 +484,7 @@ class ProductSearchAgent(BaseAgent):
                         button = await page.wait_for_selector(button_selector, timeout=2000)
                         if button:
                             await button.click()
-                            self.log(f"✅ Clicked search button: {button_selector}")
+                            self.log(f"Clicked search button: {button_selector}")
                             submitted = True
                     except:
                         pass
@@ -380,21 +492,28 @@ class ProductSearchAgent(BaseAgent):
                 # If no button, press Enter
                 if not submitted:
                     await search_input.press('Enter')
-                    self.log("✅ Pressed Enter to submit search")
+                    self.log("Pressed Enter to submit search")
                     submitted = True
                 
                 # Wait for results
-                self.log("⏳ Waiting for search results...")
-                await asyncio.sleep(5)
+                self.log("Waiting for search results...")
+                await page.wait_for_load_state('networkidle', timeout=10000)
+                await asyncio.sleep(3)
                 
+                final_url = page.url
+                self.log(f"Search completed, current URL: {final_url}")
                 return True
                 
             except Exception as e:
                 self.log(f"Error executing search: {str(e)}", "error")
+                import traceback
+                self.log(f"Traceback: {traceback.format_exc()}", "error")
                 return False
         
         except Exception as e:
             self.log(f"Error in execute_search: {str(e)}", "error")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}", "error")
             return False
     
     async def find_product_elements(self, product_specs: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -448,7 +567,7 @@ class ProductSearchAgent(BaseAgent):
                 
                 products = json.loads(result_text)
                 if isinstance(products, list) and len(products) > 0:
-                    self.log(f"✅ AI found {len(products)} products")
+                    self.log(f"AI found {len(products)} products")
                     return products
             except Exception as e:
                 if "429" not in str(e) and "quota" not in str(e).lower():
@@ -483,17 +602,217 @@ class ProductSearchAgent(BaseAgent):
             self.log(f"Error finding product elements: {str(e)}", "error")
             return []
     
+    async def click_product_image(self, product_name: str, page) -> bool:
+        """Find and click on product image after search results are displayed.
+        Reads entire page, finds text containing product name, then clicks image beside it."""
+        try:
+            self.log(f"Reading entire page to find product: {product_name}")
+            
+            # Wait for search results to load
+            await page.wait_for_load_state('networkidle', timeout=10000)
+            await asyncio.sleep(2)
+            
+            # Normalize product name for matching (e.g., "iPhone 17" -> "iphone 17")
+            product_name_lower = product_name.lower()
+            product_keywords = product_name_lower.split()
+            
+            # Get entire page content
+            self.log("Reading entire page content...")
+            page_content = await self.web_navigator.get_page_content()
+            self.log(f"Page content length: {len(page_content)} characters")
+            
+            # Strategy 1: Find all text elements containing the product name
+            self.log("Searching for text elements containing product name...")
+            
+            # XPath to find elements containing the product name
+            xpath_queries = [
+                f"//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{product_name_lower}')]",
+                f"//*[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{product_name_lower}')]",
+                f"//text()[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{product_name_lower}')]/..",
+            ]
+            
+            for xpath_query in xpath_queries:
+                try:
+                    # Find all elements containing the product name
+                    elements = await page.query_selector_all(f"xpath={xpath_query}")
+                    self.log(f"Found {len(elements)} elements containing product name")
+                    
+                    for element in elements[:20]:  # Check first 20 matches
+                        try:
+                            element_text = await element.text_content()
+                            element_text_lower = (element_text or "").lower()
+                            
+                            # Verify it actually contains all keywords
+                            if all(keyword in element_text_lower for keyword in product_keywords):
+                                self.log(f"Found matching element: {element_text[:80]}...")
+                                
+                                # Get the element's tag name
+                                tag_name = await element.evaluate("el => el.tagName.toLowerCase()")
+                                
+                                # Strategy: Find image in the same container/parent/sibling
+                                image = None
+                                
+                                # 1. Check if element itself is an image
+                                if tag_name == "img":
+                                    image = element
+                                
+                                # 2. Check for image within the same element
+                                if not image:
+                                    image = await element.query_selector("img")
+                                
+                                # 3. Check for image in parent element
+                                if not image:
+                                    try:
+                                        parent = await element.evaluate_handle("el => el.parentElement")
+                                        if parent:
+                                            image = await parent.query_selector("img")
+                                    except:
+                                        pass
+                                
+                                # 4. Check for image in grandparent element
+                                if not image:
+                                    try:
+                                        grandparent = await element.evaluate_handle("el => el.parentElement?.parentElement")
+                                        if grandparent:
+                                            image = await grandparent.query_selector("img")
+                                    except:
+                                        pass
+                                
+                                # 5. Check for sibling images (previous or next sibling)
+                                if not image:
+                                    try:
+                                        # Try previous sibling
+                                        prev_sibling = await element.evaluate_handle("el => el.previousElementSibling")
+                                        if prev_sibling:
+                                            prev_img = await prev_sibling.query_selector("img")
+                                            if prev_img:
+                                                image = prev_img
+                                        
+                                        # Try next sibling
+                                        if not image:
+                                            next_sibling = await element.evaluate_handle("el => el.nextElementSibling")
+                                            if next_sibling:
+                                                next_img = await next_sibling.query_selector("img")
+                                                if next_img:
+                                                    image = next_img
+                                    except:
+                                        pass
+                                
+                                # 6. Check for image in common ancestor (container)
+                                if not image:
+                                    try:
+                                        # Walk up the DOM tree to find a container with an image
+                                        current = element
+                                        for _ in range(5):  # Check up to 5 levels up
+                                            parent = await current.evaluate_handle("el => el.parentElement")
+                                            if not parent:
+                                                break
+                                            
+                                            # Check if parent has an image
+                                            parent_img = await parent.query_selector("img")
+                                            if parent_img:
+                                                image = parent_img
+                                                break
+                                            
+                                            current = parent
+                                    except:
+                                        pass
+                                
+                                # If we found an image, click it
+                                if image:
+                                    try:
+                                        is_visible = await image.is_visible()
+                                        if is_visible:
+                                            self.log("Found product image beside product name, clicking...")
+                                            await image.scroll_into_view_if_needed()
+                                            await asyncio.sleep(0.5)
+                                            await image.click()
+                                            await asyncio.sleep(2)
+                                            await page.wait_for_load_state('networkidle', timeout=10000)
+                                            self.log(f"Successfully clicked product image, navigated to: {page.url}")
+                                            return True
+                                    except Exception as e:
+                                        self.log(f"Error clicking image: {str(e)[:100]}", "warning")
+                                        continue
+                                
+                                # If no image found but element is clickable (link), click it
+                                if not image and tag_name == "a":
+                                    try:
+                                        is_visible = await element.is_visible()
+                                        if is_visible:
+                                            href = await element.get_attribute("href")
+                                            self.log(f"Clicking product link directly: {href}")
+                                            await element.scroll_into_view_if_needed()
+                                            await asyncio.sleep(0.5)
+                                            await element.click()
+                                            await asyncio.sleep(2)
+                                            await page.wait_for_load_state('networkidle', timeout=10000)
+                                            self.log(f"Successfully clicked product link, navigated to: {page.url}")
+                                            return True
+                                    except Exception as e:
+                                        continue
+                                
+                        except Exception as e:
+                            continue
+                            
+                except Exception as e:
+                    self.log(f"XPath query failed: {str(e)[:100]}", "debug")
+                    continue
+            
+            # Fallback: Find images with alt text or src containing product name
+            self.log("Trying fallback: searching images by alt/src attributes...")
+            try:
+                all_images = await page.query_selector_all("img")
+                self.log(f"Found {len(all_images)} images on page")
+                
+                for img in all_images[:30]:  # Check first 30 images
+                    try:
+                        alt_text = await img.get_attribute("alt") or ""
+                        title_text = await img.get_attribute("title") or ""
+                        src = await img.get_attribute("src") or ""
+                        
+                        alt_lower = alt_text.lower()
+                        title_lower = title_text.lower()
+                        src_lower = src.lower()
+                        
+                        # Check if any attribute contains product keywords
+                        if any(keyword in alt_lower or keyword in title_lower or keyword in src_lower 
+                               for keyword in product_keywords):
+                            is_visible = await img.is_visible()
+                            if is_visible:
+                                self.log(f"Found product image via attributes: {alt_text[:50]}")
+                                await img.scroll_into_view_if_needed()
+                                await asyncio.sleep(0.5)
+                                await img.click()
+                                await asyncio.sleep(2)
+                                await page.wait_for_load_state('networkidle', timeout=10000)
+                                self.log(f"Successfully clicked product image, navigated to: {page.url}")
+                                return True
+                    except:
+                        continue
+            except Exception as e:
+                self.log(f"Image search fallback failed: {str(e)[:100]}", "warning")
+            
+            self.log("Could not find product image to click", "warning")
+            return False
+            
+        except Exception as e:
+            self.log(f"Error clicking product image: {str(e)}", "error")
+            import traceback
+            self.log(traceback.format_exc(), "error")
+            return False
+    
     async def execute(self, task: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Execute product search task."""
         try:
             user_query = task.get("query", "")
             
             # Step 1: Extract product specifications
-            self.log("📦 Extracting product specifications...")
+            self.log("Extracting product specifications...")
             product_specs = await self.extract_product_specs(user_query)
             
             # Step 2: Determine website
-            self.log("🌐 Determining website...")
+            self.log("Determining website...")
             website = await self.determine_website(product_specs)
             
             if not website:
@@ -509,7 +828,7 @@ class ProductSearchAgent(BaseAgent):
                     }
             
             # Step 3: Navigate to website
-            self.log(f"🌐 Navigating to: {website}")
+            self.log(f"Navigating to: {website}")
             nav_result = await self.web_navigator.execute({
                 "action": "navigate",
                 "url": website
@@ -522,8 +841,8 @@ class ProductSearchAgent(BaseAgent):
                     "message": f"Failed to navigate to website: {website}"
                 }
             
-            # Step 4: Execute search
-            self.log("🔍 Searching for product...")
+            # Step 4: Execute search with simplified product name
+            self.log("Searching for product...")
             page = self.web_navigator.page
             if not page:
                 return {
@@ -532,17 +851,66 @@ class ProductSearchAgent(BaseAgent):
                     "message": "Browser page not available"
                 }
             
-            search_query = product_specs.get("product_name", user_query)
+            # Extract just the product name for search (not full specs)
+            # Use search_query from product_specs if available
+            search_query = product_specs.get("search_query")
+            
+            if not search_query:
+                # Extract simplified product name from full query
+                full_product_name = product_specs.get("product_name", user_query)
+                
+                # For iPhone: "iPhone 15 Pro 256GB white" -> "iPhone 15"
+                if "iphone" in full_product_name.lower():
+                    iphone_match = re.search(r'iphone\s+(\d+)', full_product_name.lower())
+                    if iphone_match:
+                        search_query = f"iPhone {iphone_match.group(1)}"
+                    else:
+                        search_query = "iPhone"
+                # For Samsung: "Samsung Galaxy S24 Ultra" -> "Samsung Galaxy S24"
+                elif "samsung" in full_product_name.lower() or "galaxy" in full_product_name.lower():
+                    galaxy_match = re.search(r'(samsung\s+galaxy\s+s\d+)', full_product_name.lower())
+                    if galaxy_match:
+                        search_query = galaxy_match.group(1).title()
+                    else:
+                        search_query = " ".join(full_product_name.split()[:3])
+                else:
+                    # For other products, take first 2-3 words (brand + model)
+                    words = full_product_name.split()
+                    search_query = " ".join(words[:3]) if len(words) >= 3 else full_product_name
+            
+            self.log(f"Using simplified search query: '{search_query}' (extracted from: '{user_query}')")
             search_success = await self.execute_search(search_query, page)
             
             if not search_success:
-                self.log("⚠️  Search box not found, trying direct navigation", "warning")
+                self.log("Search box not found, trying direct navigation", "warning")
                 # Fallback: try direct product page
                 if "apple.com" in website.lower() and "iphone" in search_query.lower():
                     await self.web_navigator.navigate_to(f"{website}/us/shop/goto/iphone")
             
-            # Step 5: Find products
-            self.log("🔎 Finding products on page...")
+            # Step 5: Click on product image if search was successful
+            if search_success:
+                self.log("Search completed, reading page and looking for product image to click...")
+                image_clicked = await self.click_product_image(search_query, page)
+                if image_clicked:
+                    current_url = await self.web_navigator.get_page_url()
+                    self.log(f"Successfully navigated to product page: {current_url}")
+                    # Return success - we've reached the product page, no need for further steps
+                    return {
+                        "status": "success",
+                        "data": {
+                            "product_specs": product_specs,
+                            "website": website,
+                            "product_page_url": current_url,
+                            "search_executed": search_success,
+                            "image_clicked": True
+                        },
+                        "message": f"Successfully navigated to product page for {search_query}"
+                    }
+                else:
+                    self.log("Could not find product image, continuing with product search", "warning")
+            
+            # Step 6: Find products (only if image click failed)
+            self.log("Finding products on page...")
             products = await self.find_product_elements(product_specs)
             
             # Filter matching products
@@ -555,7 +923,8 @@ class ProductSearchAgent(BaseAgent):
                     "product_specs": product_specs,
                     "website": website,
                     "products": result_products,
-                    "search_executed": search_success
+                    "search_executed": search_success,
+                    "image_clicked": False
                 },
                 "message": f"Found {len(result_products)} products"
             }
