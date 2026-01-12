@@ -67,6 +67,16 @@ async def demo():
                     print(f"   Status: {step_result['result']['status']}")
                     print(f"   Message: {step_result['result']['message']}")
         
+        # Show test script location
+        if result.get("data", {}).get("test_script"):
+            test_script = result["data"]["test_script"]
+            print("\n" + "="*80)
+            print("📝 TEST SCRIPT GENERATED")
+            print("="*80)
+            print(f"Test script saved to: {test_script}")
+            print(f"You can run it with: python {test_script}")
+            print("="*80)
+        
         print("\n" + "="*80)
         print("\n👀 Browser will stay open for 30 seconds so you can inspect everything...")
         print("   Watch the browser window to see all the actions!")

@@ -9,12 +9,13 @@ import asyncio
 class WebNavigatorAgent(BaseAgent):
     """Agent responsible for web navigation and browser automation."""
     
-    def __init__(self, openai_client):
+    def __init__(self, openai_client, action_tracker=None):
         super().__init__("WebNavigator", openai_client)
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.playwright = None
+        self.action_tracker = action_tracker
     
     async def _cleanup_browser(self):
         """Clean up browser resources."""
@@ -153,8 +154,13 @@ class WebNavigatorAgent(BaseAgent):
                 await self.initialize_browser()
             
             self.log(f"🌐 Navigating to: {url}")
+            if self.action_tracker:
+                self.action_tracker.add_navigation(url)
             await self.page.goto(url, wait_until="networkidle", timeout=60000)
             await asyncio.sleep(4)  # Wait longer so user can see the page load
+            if self.action_tracker:
+                self.action_tracker.add_wait("load", timeout=60000)
+                self.action_tracker.add_sleep(4)
             
             # Verify page is still open
             try:
@@ -187,8 +193,12 @@ class WebNavigatorAgent(BaseAgent):
             element = await self.find_element(selector)
             if element:
                 self.log(f"🖱️  Clicking on: {selector}")
+                if self.action_tracker:
+                    self.action_tracker.add_click(selector, element_type="element")
                 await element.click()
                 await asyncio.sleep(3)  # Longer delay so user can see the action
+                if self.action_tracker:
+                    self.action_tracker.add_sleep(3)
                 self.log(f"✅ Successfully clicked!")
                 return True
             return False
@@ -202,8 +212,12 @@ class WebNavigatorAgent(BaseAgent):
             element = await self.find_element(selector)
             if element:
                 self.log(f"⌨️  Typing in {selector}: {text}")
+                if self.action_tracker:
+                    self.action_tracker.add_fill(selector, text)
                 await element.fill(text)
                 await asyncio.sleep(2)  # Longer delay so user can see typing
+                if self.action_tracker:
+                    self.action_tracker.add_sleep(2)
                 self.log(f"✅ Successfully filled input!")
                 return True
             return False

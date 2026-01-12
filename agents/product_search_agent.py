@@ -382,8 +382,12 @@ class ProductSearchAgent(BaseAgent):
                             is_visible = await icon.is_visible()
                             if is_visible:
                                 self.log(f"Clicking Apple search icon: {icon_selector}")
+                                if self.web_navigator.action_tracker:
+                                    self.web_navigator.action_tracker.add_click(icon_selector, element_type="search_icon")
                                 await icon.click()
                                 await asyncio.sleep(2)  # Wait for search input to appear
+                                if self.web_navigator.action_tracker:
+                                    self.web_navigator.action_tracker.add_sleep(2)
                                 search_menu_opened = True
                                 self.log("Apple search menu opened")
                                 break
@@ -412,26 +416,42 @@ class ProductSearchAgent(BaseAgent):
                             self.log(f"Found search input: {selector}")
                             
                             # Click to focus
+                            if self.web_navigator.action_tracker:
+                                self.web_navigator.action_tracker.add_click(selector, element_type="search_input")
                             await search_input.click()
                             await asyncio.sleep(0.5)
+                            if self.web_navigator.action_tracker:
+                                self.web_navigator.action_tracker.add_sleep(0.5)
                             
                             # Clear any existing text
                             await search_input.fill('')
                             await asyncio.sleep(0.3)
+                            if self.web_navigator.action_tracker:
+                                self.web_navigator.action_tracker.add_sleep(0.3)
                             
                             # Type the search query
+                            if self.web_navigator.action_tracker:
+                                self.web_navigator.action_tracker.add_fill(selector, search_query)
                             await search_input.fill(search_query)
                             self.log(f"Typed search query: {search_query}")
                             await asyncio.sleep(1)
+                            if self.web_navigator.action_tracker:
+                                self.web_navigator.action_tracker.add_sleep(1)
                             
                             # Submit search
+                            if self.web_navigator.action_tracker:
+                                self.web_navigator.action_tracker.add_press(selector, "Enter")
                             await search_input.press('Enter')
                             self.log("Pressed Enter to submit search")
                             search_filled = True
                             
                             # Wait for navigation
                             await page.wait_for_load_state('networkidle', timeout=10000)
+                            if self.web_navigator.action_tracker:
+                                self.web_navigator.action_tracker.add_wait("load", timeout=10000)
                             await asyncio.sleep(2)
+                            if self.web_navigator.action_tracker:
+                                self.web_navigator.action_tracker.add_sleep(2)
                             
                             new_url = page.url
                             self.log(f"Search submitted, navigated to: {new_url}")
@@ -726,9 +746,16 @@ class ProductSearchAgent(BaseAgent):
                                             self.log("Found product image beside product name, clicking...")
                                             await image.scroll_into_view_if_needed()
                                             await asyncio.sleep(0.5)
+                                            if self.web_navigator.action_tracker:
+                                                self.web_navigator.action_tracker.add_click("img (product image)", element_type="product_image")
+                                                self.web_navigator.action_tracker.add_sleep(0.5)
                                             await image.click()
                                             await asyncio.sleep(2)
+                                            if self.web_navigator.action_tracker:
+                                                self.web_navigator.action_tracker.add_sleep(2)
                                             await page.wait_for_load_state('networkidle', timeout=10000)
+                                            if self.web_navigator.action_tracker:
+                                                self.web_navigator.action_tracker.add_wait("load", timeout=10000)
                                             self.log(f"Successfully clicked product image, navigated to: {page.url}")
                                             return True
                                     except Exception as e:

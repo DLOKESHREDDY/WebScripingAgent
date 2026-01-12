@@ -8,6 +8,10 @@ from agents.web_navigator import WebNavigatorAgent
 from agents.product_search_agent import ProductSearchAgent
 from agents.cart_checkout_agent import CartCheckoutAgent
 from config import Config
+from utils.action_tracker import ActionTracker
+from utils.script_generator import PlaywrightScriptGenerator
+import os
+from datetime import datetime
 
 class OrchestratorAgent(BaseAgent):
     """Main orchestrator agent that coordinates all other agents."""
@@ -15,8 +19,11 @@ class OrchestratorAgent(BaseAgent):
     def __init__(self, openai_client):
         super().__init__("Orchestrator", openai_client)
         
-        # Initialize sub-agents
-        self.web_navigator = WebNavigatorAgent(openai_client)
+        # Initialize action tracker
+        self.action_tracker = ActionTracker()
+        
+        # Initialize sub-agents with action tracker
+        self.web_navigator = WebNavigatorAgent(openai_client, self.action_tracker)
         self.product_search = ProductSearchAgent(openai_client, self.web_navigator)
         self.cart_checkout = CartCheckoutAgent(openai_client, self.web_navigator)
         
@@ -181,6 +188,9 @@ class OrchestratorAgent(BaseAgent):
             
             self.log(f"Starting orchestration for query: {user_query}")
             
+            # Start action tracking
+            self.action_tracker.start()
+            
             # Step 1: Initialize browser (with retry)
             max_retries = 3
             browser_initialized = False
@@ -221,14 +231,26 @@ class OrchestratorAgent(BaseAgent):
             if video_path:
                 self.log(f"Video recording saved to: {video_path}")
             
+            # Step 5: Stop tracking and generate test script
+            self.action_tracker.stop()
+            self.log("Generating Playwright test script from execution...")
+            script_generator = PlaywrightScriptGenerator(self.action_tracker.get_actions(), user_query)
+            
+            # Generate script filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            script_filename = f"test_generated_{timestamp}.py"
+            script_path = script_generator.save(script_filename)
+            self.log(f"Test script generated and saved to: {script_path}")
+            
             return {
                 "status": result["status"],
                 "data": {
                     "query": user_query,
                     "plan": plan,
-                    "execution": result
+                    "execution": result,
+                    "test_script": script_path
                 },
-                "message": f"Orchestration completed with status: {result['status']}"
+                "message": f"Orchestration completed with status: {result['status']}. Test script saved to {script_path}"
             }
         
         except Exception as e:
